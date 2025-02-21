@@ -15,9 +15,11 @@ using Neo.Persistence;
 using Neo.Persistence.Providers;
 using Neo.SmartContract;
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Neo.Plugins.Storage;
 
 namespace Neo.UnitTests.IO.Caching
 {
@@ -26,6 +28,7 @@ namespace Neo.UnitTests.IO.Caching
     {
         private readonly MemoryStore store = new();
         private StoreCache myDataCache;
+	private static LevelDBStore lstore;
 
         private static readonly StorageKey key1 = new() { Id = 0, Key = Encoding.UTF8.GetBytes("key1") };
         private static readonly StorageKey key2 = new() { Id = 0, Key = Encoding.UTF8.GetBytes("key2") };
@@ -38,6 +41,22 @@ namespace Neo.UnitTests.IO.Caching
         private static readonly StorageItem value3 = new(Encoding.UTF8.GetBytes("value3"));
         private static readonly StorageItem value4 = new(Encoding.UTF8.GetBytes("value4"));
         private static readonly StorageItem value5 = new(Encoding.UTF8.GetBytes("value5"));
+
+        [AssemblyInitialize]
+        public static void OnStart(TestContext testContext)
+        {
+            OnEnd();
+	    lstore = new LevelDBStore();
+        }
+
+        [AssemblyCleanup]
+        public static void OnEnd()
+        {
+            lstore?.Dispose();
+
+            if (Directory.Exists("Data_LevelDB_UT")) Directory.Delete("Data_LevelDB_UT", true);
+            if (Directory.Exists("Data_LevelDB_UT2")) Directory.Delete("Data_LevelDB_UT2", true);
+        }
 
         [TestInitialize]
         public void Initialize()
@@ -163,13 +182,28 @@ namespace Neo.UnitTests.IO.Caching
         [TestMethod]
         public void TestFind()
         {
+	    var store = lstore.GetStore("Data_LevelDB_UT2");
+	    var myDataCache = new StoreCache(store);
+
             myDataCache.Add(key1, value1);
             myDataCache.Add(key2, value2);
 
             store.Put(key3.ToArray(), value3.ToArray());
             store.Put(key4.ToArray(), value4.ToArray());
 
+	    StorageKey keya = new() { Id = 0, Key = Encoding.UTF8.GetBytes("za") };
+	    StorageKey keyaa = new() { Id = 0, Key = Encoding.UTF8.GetBytes("zaa") };
+	    StorageKey keyaaa = new() { Id = 0, Key = Encoding.UTF8.GetBytes("zaaa") };
+	    StorageKey keyb = new() { Id = 0, Key = Encoding.UTF8.GetBytes("zb") };
+
+            store.Put(keya.ToArray(), value4.ToArray());
+            store.Put(keyaa.ToArray(), value4.ToArray());
+            store.Put(keyaaa.ToArray(), value4.ToArray());
+            store.Put(keyb.ToArray(), value4.ToArray());
+
+	    var ka = keya.ToArray();
             var k1 = key1.ToArray();
+            var k3 = key3.ToArray();
             var items = myDataCache.Find(k1);
             Assert.AreEqual(key1, items.ElementAt(0).Key);
             Assert.AreEqual(value1, items.ElementAt(0).Value);
@@ -177,9 +211,9 @@ namespace Neo.UnitTests.IO.Caching
 
             // null and empty with the forward direction -> finds everything.
             items = myDataCache.Find(null);
-            Assert.AreEqual(4, items.Count());
+            Assert.AreEqual(8, items.Count());
             items = myDataCache.Find([]);
-            Assert.AreEqual(4, items.Count());
+            Assert.AreEqual(8, items.Count());
 
             // null and empty with the backwards direction -> miserably fails.
             Action action = () => myDataCache.Find(null, SeekDirection.Backward);
@@ -191,6 +225,12 @@ namespace Neo.UnitTests.IO.Caching
             Assert.AreEqual(key1, items.ElementAt(0).Key);
             Assert.AreEqual(value1, items.ElementAt(0).Value);
             Assert.AreEqual(1, items.Count());
+
+            items = myDataCache.Find(ka, SeekDirection.Backward);
+            Assert.AreEqual(keyaaa, items.ElementAt(0).Key);
+            Assert.AreEqual(keyaa, items.ElementAt(1).Key);
+            Assert.AreEqual(keya, items.ElementAt(2).Key);
+            Assert.AreEqual(3, items.Count());
 
             var prefix = k1.Take(k1.Count() - 1).ToArray(); // Just the "key" part to match everything.
             items = myDataCache.Find(prefix);
@@ -242,7 +282,7 @@ namespace Neo.UnitTests.IO.Caching
         [TestMethod]
         public void TestFindRange()
         {
-            var store = new MemoryStore();
+	    var store = lstore.GetStore("Data_LevelDB_UT");
             store.Put(key3.ToArray(), value3.ToArray());
             store.Put(key4.ToArray(), value4.ToArray());
 
@@ -259,7 +299,8 @@ namespace Neo.UnitTests.IO.Caching
 
             // case 2 Need to sort the cache of myDataCache
 
-            store = new();
+	    store.Dispose();
+	    store = lstore.GetStore("Data_LevelDB_UT");
             store.Put(key4.ToArray(), value4.ToArray());
             store.Put(key3.ToArray(), value3.ToArray());
 
@@ -276,7 +317,8 @@ namespace Neo.UnitTests.IO.Caching
 
             // case 3 FindRange by Backward
 
-            store = new();
+	    store.Dispose();
+	    store = lstore.GetStore("Data_LevelDB_UT");
             store.Put(key4.ToArray(), value4.ToArray());
             store.Put(key3.ToArray(), value3.ToArray());
             store.Put(key5.ToArray(), value5.ToArray());
@@ -285,11 +327,11 @@ namespace Neo.UnitTests.IO.Caching
             myDataCache.Add(key1, value1);
             myDataCache.Add(key2, value2);
 
-            items = myDataCache.FindRange(key5.ToArray(), key3.ToArray(), SeekDirection.Backward).ToArray();
-            Assert.AreEqual(key5, items[0].Key);
-            Assert.IsTrue(items[0].Value.EqualsTo(value5));
-            Assert.AreEqual(key4, items[1].Key);
-            Assert.IsTrue(items[1].Value.EqualsTo(value4));
+            items = myDataCache.FindRange(key4.ToArray(), key2.ToArray(), SeekDirection.Backward).ToArray();
+            Assert.AreEqual(key4, items[0].Key);
+            Assert.IsTrue(items[0].Value.EqualsTo(value4));
+            Assert.AreEqual(key3, items[1].Key);
+            Assert.IsTrue(items[1].Value.EqualsTo(value3));
             Assert.AreEqual(2, items.Length);
         }
 
